@@ -28,8 +28,8 @@ A compiling Rust repository containing
 3. Describe and understand CTrie interface, algorithms, and API
     - [Lock-Free Resizeable Concurrent Tries](http://chara.epfl.ch/~prokopec/lcpc_ctries.pdf)
     - [Cache-Aware Lock-Free Concurrent Hash Tries](https://arxiv.org/pdf/1709.06056.pdf)
+    - Rich Hickey on [Persistent Data Structures](https://www.youtube.com/watch?v=toD45DtVCFM&ab_channel=ZhangJian)
 4. Implement Ctrie from pseudocode in papers
-    - Fixed sized keys?
 5. Testing
     - Correctness tests: Does array mapped trie behave as expected and satisfy key features
         - Test API operations
@@ -42,3 +42,9 @@ A compiling Rust repository containing
     - Testing results + performance
 7. ???
 8. Profit!
+
+## Timeline
+- 5/8  - Meet to discuss what we've read
+- 5/9  - Learn Rust + Read Papers
+- 5/19 - Implementation
+- 5/23 - Submission
