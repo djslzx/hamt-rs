@@ -1,3 +1,67 @@
+#![feature(asm)]
+#![allow(dead_code)]
+
+mod util;
+use crate::util::{
+    bitrank,
+    bitarr::{
+        b64, b128,
+    },
+};
+use std::hash::{Hash};
+use fasthash::murmur3::hash128_with_seed;
+
+// Structs
+#[derive(Debug)]
+pub struct Tree<K, V> where K: Hash {
+    occupied: u64,
+    children: Vec<Child<K,V>>,
+    seed: u32,
+}
+
+#[derive(Debug)]
+enum Child<K,V> where K: Hash {
+    Pair(K, V),
+    Node(Tree<K, V>),
+}
+
+impl<K: Clone,V> Tree<K, V> where K: Hash + AsRef<[u8]> {
+    fn hash(&self, key: K) -> u128 {
+        hash128_with_seed(key, self.seed)
+    }
+    fn insert(&mut self, key: K, val: V) {
+        // do hash
+        let h = self.hash(key.clone());
+        let i = (h & b128::mask(6)) as usize;
+        println!("h: 0x{:x}, i: 0x{:x}", h, i);
+
+        // try looking at appropriate entry
+        let n = bitrank(self.occupied, i) as usize;
+        if b64::get(self.occupied, i) {
+            match self.children.get(n).unwrap() {
+                Child::Pair(k, v) => {
+                    // if occupied by entry, then make subtree
+
+                }
+                Child::Node(tree) => {
+                    // if subtree, then enter subtree and recursively insert
+
+                }
+            }
+        } else {
+            // add the k-v pair, set occupied
+            self.occupied = b64::set(self.occupied, i);
+            self.children.insert(n, Child::Pair(key, val));
+        }
+    }
+}
+
 fn main() {
-    println!("Hello, world!");
+    let mut tree = Tree {
+        occupied: 0,
+        children: Vec::new(),
+        seed: 0,
+    };
+    tree.insert("peter", 2);
+    println!("{:?}", tree);
 }
