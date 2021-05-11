@@ -22,7 +22,7 @@ pub struct Tree<K, V> where K: Hash {
 #[derive(Debug)]
 enum Child<K,V> where K: Hash {
     Pair(K, V),
-    Node(Tree<K, V>),
+    AMTNode(Tree<K, V>),
 }
 
 impl<K: Clone,V> Tree<K, V> where K: Hash + AsRef<[u8]> {
@@ -37,15 +37,30 @@ impl<K: Clone,V> Tree<K, V> where K: Hash + AsRef<[u8]> {
 
         // try looking at appropriate entry
         let n = bitrank(self.occupied, i) as usize;
+        // TODO: Bitrank is weird on same keys/collisions. Need to check
+        println!("n: {}", n);
         if b64::get(self.occupied, i) {
             match self.children.get(n).unwrap() {
-                Child::Pair(k, v) => {
+                Child::Pair(_, _) => {
                     // if occupied by entry, then make subtree
-
+                    let mut subtree = Tree {
+                        occupied: 0,
+                        children: Vec::new(),
+                        seed: 0,
+                    };
+                    // TODO: Is this most efficient way of getting ownership of matched var?
+                    if let Child::Pair(old_k, old_v) = self.children.remove(n) {
+                        subtree.insert(old_k, old_v);                                        
+                    }   
+                    subtree.insert(key, val);      
+                    self.children.insert(n, Child::AMTNode(subtree));           
                 }
-                Child::Node(tree) => {
+                Child::AMTNode(_) => {
                     // if subtree, then enter subtree and recursively insert
-
+                    if let Child::AMTNode(mut tree) = self.children.remove(n) {
+                        tree.insert(key, val);
+                        self.children.insert(n, Child::AMTNode(tree));
+                    }                    
                 }
             }
         } else {
@@ -63,5 +78,9 @@ fn main() {
         seed: 0,
     };
     tree.insert("peter", 2);
+    println!("{:?}", tree);
+    tree.insert("andrew", 3);
+    println!("{:?}", tree);
+    tree.insert("david", 4);
     println!("{:?}", tree);
 }
