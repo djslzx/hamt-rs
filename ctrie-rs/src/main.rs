@@ -36,15 +36,8 @@ impl<K: Clone,V> Tree<K, V> where K: Hash + AsRef<[u8]> + PartialEq {
         println!("h: 0x{:x}, i: 0x{:x}", h, i);
 
         // try looking at appropriate entry
-        let n = bitrank(self.occupied, i-1) as usize;
+        let n = if i == 0 {0 as usize} else {bitrank(self.occupied, i-1) as usize};
         println!("bitmap: {:b}", self.occupied);
-        // TODO: Bitrank is weird on same keys/collisions. Need to check
-        println!("n: {}", n);
-        // if n > 0 {
-        //     n -= 1;
-        // }
-        // 000000 -> 0
-        // 100000 -> 0
         if b64::get(self.occupied, i) {
             match self.children.get(n).unwrap() {
                 Child::Pair(_, _) => {
