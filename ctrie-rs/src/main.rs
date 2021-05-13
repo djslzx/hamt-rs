@@ -36,7 +36,7 @@ impl<K: Clone,V> Tree<K, V> where K: Hash + AsRef<[u8]> + PartialEq {
         println!("h: 0x{:x}, i: 0x{:x}", h, i);
 
         // try looking at appropriate entry
-        let mut n = bitrank(self.occupied, i) as usize;
+        let n = bitrank(self.occupied, i-1) as usize;
         println!("bitmap: {:b}", self.occupied);
         // TODO: Bitrank is weird on same keys/collisions. Need to check
         println!("n: {}", n);
