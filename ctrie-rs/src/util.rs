@@ -18,6 +18,10 @@ pub fn bitrank(val: u64, pos: usize) -> u64 {
     let val = val & mask;
     popcnt(val)
 }
+// val = 010100, pos = 2
+// mask = 000010 --> 001000
+// mask = 000111
+// val = 000100 -> popcnt this = 1 which is wrong, we want to insert in index 0 (popcnt up to i EXCLUSIVELY)
 
 pub mod bitarr {
     // 64-bit bit arrays
