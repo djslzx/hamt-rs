@@ -12,8 +12,9 @@ pub fn popcnt(val: u64) -> u64 {
     }
 }
 
+/// Count the number of 1 bits in val[0, pos]
 pub fn bitrank(val: u64, pos: usize) -> u64 {
-    let mask = 2 << pos;
+    let mask = 2 << pos; // 2^(pos+1)
     let mask = if mask == 0 { !0 } else { mask-1 };
     let val = val & mask;
     popcnt(val)
@@ -182,6 +183,31 @@ pub mod bitarr {
                 }
             }
 
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_popcnt() {
+        assert_eq!(popcnt(0b0), 0);
+        assert_eq!(popcnt(0b1), 1);
+        assert_eq!(popcnt(0b101010), 3);
+    }
+
+    #[test]
+    fn test_bitrank() {
+        for i in 0..=63 {
+            for j in 0..=63 {
+                assert_eq!(
+                    bitrank(1 << i, j),
+                    if i <= j { 1 } else { 0 },
+                    "i={}, j={}", i, j,
+                );
+            }
         }
     }
 }
