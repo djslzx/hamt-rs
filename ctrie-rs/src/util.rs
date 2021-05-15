@@ -154,6 +154,10 @@ pub mod bitarr {
         pub fn mask(k: usize) -> u128 {
             (1 << k) - 1
         }
+        /// Get bits in [a, b) and place in [0, b-a)
+        pub fn get_bits(x: u128, a: usize, b:usize) -> u128 {
+            (x & half_open(a, b)) >> a
+        }
         #[cfg(test)]
         mod tests {
             use super::*;
@@ -182,7 +186,14 @@ pub mod bitarr {
                     assert_eq!(mask(i), half_open(0, i));
                 }
             }
-
+            #[test]
+            fn test_get_bits() {
+                assert_eq!(get_bits(0b0, 0, 0), 0);
+                assert_eq!(get_bits(0b1, 0, 1), 1);
+                assert_eq!(get_bits(0b10, 0, 1), 0);
+                assert_eq!(get_bits(0b10, 1, 2), 1);
+                assert_eq!(get_bits(0b1010, 1, 4), 0b101);
+            }
         }
     }
 }

@@ -52,6 +52,18 @@ impl<K,V> Tree<K,V>
             children: Vec::new(),
         }
     }
+    fn occupied_at(&self, i: usize) -> bool {
+        b64::get(self.occupied, i)
+    }
+    fn set_occupied(&mut self, i: usize) {
+        self.occupied = b64::set(self.occupied, i);
+    }
+    fn set_unoccupied(&mut self, i: usize) {
+        self.occupied = b64::unset(self.occupied, i);
+    }
+    fn add_child(&mut self, i: usize, c: Child<K,V>) {
+        self.children.insert(i, c);
+    }
 }
 
 impl<K,V> fmt::Debug for Tree<K,V>
@@ -84,11 +96,15 @@ impl<K,V> Hamt<K,V>
     fn hash(key: K, seed: u32) -> u128 {
         hash128_with_seed(key, seed)
     }
-    fn insert_into_node(node: &mut Tree<K,V>, key: K, val: V, seed: u32) {
-        let hash = Self::hash(key, seed);
-        let slot = (hash & b128::mask(LOG_N_CHILDREN)) as usize;
+    fn get_slot(hash: u128, level: usize) -> usize {
+        b128::get_bits(hash,
+                       level * LOG_N_CHILDREN,
+                       (level+1) * LOG_N_CHILDREN) as usize
+    }
+    fn insert_into_node(node: &mut Tree<K,V>, key: K, val: V, hash: u128, level: usize) {
+        let slot = Self::get_slot(hash, level);
         let n: usize = if slot == 0 {0} else {bitrank(node.occupied, slot-1)} as usize;
-        if b64::get(node.occupied, slot) {
+        if node.occupied_at(slot) {
             match node.children.get_mut(n).unwrap() {
                 Child::KVPair(k, v) => {
                     if *k == key {
@@ -97,24 +113,28 @@ impl<K,V> Hamt<K,V>
                     } else {
                         // if occupied by entry with different key, replace with subtree
                         let mut subtree = Tree::new();
-                        Self::insert_into_node(&mut subtree, *k, *v, seed);
-                        Self::insert_into_node(&mut subtree, key, val, seed);
-                        node.children.insert(n, Child::AMTNode(subtree));
+                        Self::insert_into_node(&mut subtree, *k, *v, hash, level+1);
+                        Self::insert_into_node(&mut subtree, key, val, hash, level+1);
+                        node.add_child(n, Child::AMTNode(subtree));
                     }
                 }
                 Child::AMTNode(tree) => {
                     // if subtree, then enter subtree and recursively insert
-                    Self::insert_into_node(tree, key, val, seed);
+                    Self::insert_into_node(tree, key, val, hash, level+1);
                 }
             }
         } else {
             // add the k-v pair, set occupied
-            node.occupied = b64::set(node.occupied, slot);
-            node.children.insert(n, Child::KVPair(key, val));
+            node.set_occupied(slot);
+            node.add_child(n, Child::KVPair(key, val));
         }
     }
     fn insert(&mut self, key: K, val: V) {
-        Self::insert_into_node(&mut self.root, key, val, self.seed)
+        let hash = Self::hash(key, self.seed);
+        Self::insert_into_node(&mut self.root, key, val, hash, 0)
+    }
+    fn lookup(&self, key: K) -> V {
+        unimplemented!();
     }
 }
 
@@ -123,17 +143,23 @@ mod tests {
     use super::*;
     type TestHamt<'a> = Hamt<&'a str, u64>;
 
-    fn get_slot(hamt: &TestHamt, key: &str) -> usize {
-        let hash = TestHamt::hash(key, hamt.seed);
-        (hash & b128::mask(LOG_N_CHILDREN)) as usize
+    #[test]
+    fn test_get_slot() {
+        assert_eq!(TestHamt::get_slot(0b1000000, 0), 0);
+        assert_eq!(TestHamt::get_slot(0b1000000, 1), 1);
+        assert_eq!(TestHamt::get_slot(0b11000000, 1), 0b11);
+        assert_eq!(TestHamt::get_slot(0b1000000111111000000, 1), 0b111111);
+        assert_eq!(TestHamt::get_slot(0b1000000111111000000, 2), 0);
+        assert_eq!(TestHamt::get_slot(0b1000000111111000000, 3), 1);
     }
 
     #[test]
-    fn test_insert() {
+    fn test_insert_root_level() {
         let mut hamt = Hamt::new();
         // First insert
         hamt.insert("peter", 2);
-        let slot = get_slot(&hamt, "peter");
+        let hash = TestHamt::hash("peter", hamt.seed);
+        let slot = TestHamt::get_slot(hash, 0);
         // Check occupied bit
         for i in 0..N_CHILDREN {
             assert_eq!(b64::get(hamt.root.occupied, i), i == slot);
@@ -156,10 +182,14 @@ mod tests {
 
         // Insert second kv pair
         hamt.insert("david", 5);
-        let slot2 = get_slot(&hamt, "david");
+        let hash2 = TestHamt::hash("david", hamt.seed);
+        let slot2 = TestHamt::get_slot(hash2, 0);
         // Check occupied bit
         for i in 0..N_CHILDREN {
-            assert_eq!(b64::get(hamt.root.occupied, i), i == slot || i == slot2);
+            assert_eq!(b64::get(hamt.root.occupied, i),
+                       i == slot || i == slot2,
+                       "i={}, occupieds={:b}, slot1={}, slot2={}",
+                       i, hamt.root.occupied, slot, slot2);
         }
         // Check children
         assert_eq!(hamt.root.children.len(), 2);
