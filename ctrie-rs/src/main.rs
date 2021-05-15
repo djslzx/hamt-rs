@@ -133,8 +133,27 @@ impl<K,V> Hamt<K,V>
         let hash = Self::hash(key, self.seed);
         Self::insert_into_node(&mut self.root, key, val, hash, 0)
     }
-    fn lookup(&self, key: K) -> V {
-        unimplemented!();
+    fn lookup_in_node(node: &Tree<K,V>, key: K, hash: u128, level: usize) -> Option<V> {
+        let slot = Self::get_slot(hash, level);
+        let n: usize = if slot == 0 {0} else {bitrank(node.occupied, slot-1)} as usize;
+        if node.occupied_at(slot) {
+            match node.children.get(n).unwrap() {
+                Child::KVPair(k, v) =>
+                    if *k == key {
+                        Some(*v)
+                    } else {
+                        None
+                    },
+                Child::AMTNode(tree) =>
+                    Self::lookup_in_node(tree, key, hash, level+1),
+            }
+        } else {
+            None
+        }
+    }
+    fn get(&self, key: K) -> Option<V> {
+        let hash = Self::hash(key, self.seed);
+        Self::lookup_in_node(&self.root, key, hash, 0)
     }
 }
 
@@ -206,6 +225,26 @@ mod tests {
         assert_eq!(hamt.root.children.len(), 2);
         assert!(hamt.root.children.contains(&Child::KVPair("peter", 3)));
         assert!(hamt.root.children.contains(&Child::KVPair("david", 5)));
+    }
+
+    #[test]
+    fn test_get() {
+        let mut hamt = Hamt::new();
+        let kvs = vec![
+            ("a", 1), ("b", 2), ("c", 3),
+        ];
+        for (k,v) in kvs.iter() {
+            hamt.insert(k, v);
+        }
+        for (k,v) in kvs.iter() {
+            assert_eq!(hamt.get(k), Some(v));
+        }
+        let keys = vec![
+            "d", "e", "f",
+        ];
+        for k in keys.iter() {
+            assert_eq!(hamt.get(k), None);
+        }
     }
 }
 
