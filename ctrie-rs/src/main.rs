@@ -22,20 +22,22 @@ const N_CHILDREN: usize = 64;
 const LOG_N_CHILDREN: usize = 6;
 
 // Structs
+#[derive(PartialEq)]
+pub struct Node<K,V>
+    where K: Hash
+{
+    occupied: u64,
+    children: Vec<Child<K,V>>,
+}
+
+pub type Tree<K,V> = Option<Box<Node<K,V>>>;
+
 #[derive(Debug)]
 pub struct Hamt<K,V>
     where K: Hash
 {
     root: Tree<K,V>,
     seed: u32,
-}
-
-#[derive(PartialEq)]
-pub struct Tree<K,V>
-    where K: Hash
-{
-    occupied: u64,
-    children: Vec<Child<K,V>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -46,14 +48,17 @@ enum Child<K,V>
     AMTNode(Tree<K,V>),
 }
 
-impl<K,V> Tree<K,V>
+impl<K,V> Node<K,V>
     where K: Hash + AsRef<[u8]> + PartialEq
 {
-    fn new() -> Tree<K,V> {
-        Tree {
+    fn new() -> Node<K,V> {
+        Node {
             occupied: 0,
             children: Vec::new(),
         }
+    }
+    fn new_tree() -> Tree<K,V> {
+        Some(Box::new(Self::new()))
     }
     fn occupied_at(&self, i: usize) -> bool {
         b64::get(self.occupied, i)
@@ -76,7 +81,7 @@ impl<K,V> Tree<K,V>
     }
 }
 
-impl<K,V> fmt::Debug for Tree<K,V>
+impl<K,V> fmt::Debug for Node<K,V>
     where K: Hash + fmt::Debug, V: fmt::Debug
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -96,10 +101,7 @@ impl<K,V> Hamt<K,V>
     }
     fn with_seed(seed: u32) -> Hamt<K,V> {
         Hamt {
-            root: Tree {
-                occupied: 0,
-                children: Vec::new(),
-            },
+            root: Node::new_tree(),
             seed,
         }
     }
@@ -111,10 +113,10 @@ impl<K,V> Hamt<K,V>
                        level * LOG_N_CHILDREN,
                        (level+1) * LOG_N_CHILDREN) as usize
     }
-    fn choose_child(node: &Tree<K,V>, slot: usize) -> usize {
+    fn choose_child(node: &Node<K,V>, slot: usize) -> usize {
         (if slot == 0 {0} else {bitrank(node.occupied, slot-1)}) as usize
     }
-    fn insert_into_node(node: &mut Tree<K,V>, key: K, val: V, hash: u128, level: usize) {
+    fn insert_into_node(node: &mut Node<K,V>, key: K, val: V, hash: u128, level: usize) {
         let slot = Self::get_slot(hash, level);
         let n = Self::choose_child(node, slot);
         if node.occupied_at(slot) {
@@ -125,15 +127,16 @@ impl<K,V> Hamt<K,V>
                         *v = val;
                     } else {
                         // if occupied by entry with different key, replace with subtree
-                        let mut subtree = Tree::new();
-                        Self::insert_into_node(&mut subtree, *k, *v, hash, level+1);
-                        Self::insert_into_node(&mut subtree, key, val, hash, level+1);
+                        let mut subtree = Node::new_tree();
+                        let mut subnode = subtree.as_mut().unwrap();
+                        Self::insert_into_node(&mut subnode, *k, *v, hash, level+1);
+                        Self::insert_into_node(&mut subnode, key, val, hash, level+1);
                         node.replace_child(n, Child::AMTNode(subtree));
                     }
                 }
                 Child::AMTNode(tree) => {
                     // if subtree, then enter subtree and recursively insert
-                    Self::insert_into_node(tree, key, val, hash, level+1);
+                    Self::insert_into_node(tree.as_mut().unwrap(), key, val, hash, level+1);
                 }
             }
         } else {
@@ -142,7 +145,7 @@ impl<K,V> Hamt<K,V>
             node.insert_child(n, Child::KVPair(key, val));
         }
     }
-    fn lookup_in_node(node: &Tree<K,V>, key: K, hash: u128, level: usize) -> Option<V> {
+    fn lookup_in_node(node: &Node<K,V>, key: K, hash: u128, level: usize) -> Option<V> {
         let slot = Self::get_slot(hash, level);
         if node.occupied_at(slot) {
             let n = Self::choose_child(node, slot);
@@ -154,61 +157,65 @@ impl<K,V> Hamt<K,V>
                         None
                     },
                 Child::AMTNode(tree) =>
-                    Self::lookup_in_node(tree, key, hash, level+1),
+                    Self::lookup_in_node(tree.as_ref().unwrap(), key, hash, level+1),
             }
         } else {
             None
         }
     }
-    fn delete_in_node(node: &mut Tree<K,V>, key: K, hash: u128, level: usize, slot: usize, n: usize) -> Option<V> {
-        if node.occupied_at(slot) {
-            match node.children.get_mut(n).unwrap() {
-                Child::KVPair(_, v) => {
+    fn delete_in_node(parent: &mut Node<K,V>, key: K, hash: u128, level: usize, slot: usize, n: usize) -> Option<V> {
+        if !parent.occupied_at(slot) {
+            None
+        } else {
+            // If child is kvpair, then remove
+            // If parent's child has 2 children, then:
+            // (1) If grandchild to remove is a kvpair, then replace the child with the other grandchild
+            // (2) If grandchild to remove is a tree, then "recurse"
+            match parent.children.get_mut(n).unwrap() {
+                Child::KVPair(k, v) => {
                     let val = *v;
-                    node.remove_child(n);
+                    parent.remove_child(n);
                     Some(val)
                 }
-                Child::AMTNode(tree) => {
-                    let sub_slot = Self::get_slot(hash, level+1);
-                    let sub_n = Self::choose_child(&tree, sub_slot);
-                    debug_assert!(tree.children.len() > 1);
-                    if tree.children.len() == 2 {
-                        // If subtree has 2 elts:
-                        // - if the removed elt is a KV pair, then drop tree and pull the other child up
-                        // - if the removed elt is a tree, then recurse on the tree
-                        let other_n = !sub_n; // tree has 2 entries, so the other entry is indexed by sub_n's complement
-                        let c = tree.children.get(other_n).unwrap();
-                        match tree.children.get(sub_n).unwrap() {
-                            Child::KVPair(_, v) => {
-                                node.insert_child(n, *c);
-                                Some(*v)
+                Child::AMTNode(child) => {
+                    let child = child.as_mut().unwrap();
+                    if child.children.len() == 2 {
+                        let child_slot = Self::get_slot(hash, level+1);
+                        let child_n = Self::choose_child(child, child_slot);
+                        match child.children.get(child_n).unwrap() {
+                            Child::KVPair(k, v) => {
+                                // pull up the other child if it's a KV pair
+                                let val = *v;
+                                let other_child_n = !child_n;
+                                let childy = *child.children.get(other_child_n).unwrap();
+                                parent.insert_child(n, childy);
+                                Some(val)
                             }
-                            Child::AMTNode(_) => {
-                                Self::delete_in_node(tree, key, hash, level+1, sub_slot, sub_n)
+                            Child::AMTNode(gchild) => {
+                                None
                             }
                         }
                     } else {
-                        Self::delete_in_node(tree, key, hash, level+1, sub_slot, sub_n)
+                        None
                     }
                 }
             }
-        } else {
-            None
         }
     }
     fn insert(&mut self, key: K, val: V) {
         let hash = Self::hash(key, self.seed);
-        Self::insert_into_node(&mut self.root, key, val, hash, 0)
+        Self::insert_into_node(&mut self.root.as_mut().unwrap(), key, val, hash, 0)
     }
     fn get(&self, key: K) -> Option<V> {
         let hash = Self::hash(key, self.seed);
-        Self::lookup_in_node(&self.root, key, hash, 0)
+        let root = self.root.as_ref().unwrap();
+        Self::lookup_in_node(root, key, hash, 0)
     }
     fn remove(&mut self, key: K) -> Option<V> {
         let hash = Self::hash(key, self.seed);
         let slot = Self::get_slot(hash, 0);
-        let n = Self::choose_child(&self.root, slot);
-        Self::delete_in_node(&mut self.root, key, hash, 0, slot, n)
+        let n = Self::choose_child(&self.root.as_mut().unwrap(), slot);
+        Self::delete_in_node(&mut self.root.as_mut().unwrap(), key, hash, 0, slot, n)
     }
 }
 
@@ -236,22 +243,22 @@ mod tests {
         let slot = TestHamt::get_slot(hash, 0);
         // Check occupied bit
         for i in 0..N_CHILDREN {
-            assert_eq!(b64::get(hamt.root.occupied, i), i == slot);
+            assert_eq!(b64::get(hamt.root.as_ref().unwrap().occupied, i), i == slot);
         }
         // Check children
-        assert_eq!(hamt.root.children.len(), 1);
-        assert_eq!(*hamt.root.children.first().unwrap(),
+        assert_eq!(hamt.root.as_ref().unwrap().children.len(), 1);
+        assert_eq!(*hamt.root.as_ref().unwrap().children.first().unwrap(),
                    Child::KVPair("peter", 2));
 
         // Update value
         hamt.insert("peter", 5);
         // Check occupied bit
         for i in 0..N_CHILDREN {
-            assert_eq!(b64::get(hamt.root.occupied, i), i == slot);
+            assert_eq!(b64::get(hamt.root.as_ref().unwrap().occupied, i), i == slot);
         }
         // Check children
-        assert_eq!(hamt.root.children.len(), 1);
-        assert_eq!(*hamt.root.children.first().unwrap(),
+        assert_eq!(hamt.root.as_ref().unwrap().children.len(), 1);
+        assert_eq!(*hamt.root.as_ref().unwrap().children.first().unwrap(),
                    Child::KVPair("peter", 5));
 
         // Insert second kv pair
@@ -260,26 +267,26 @@ mod tests {
         let slot2 = TestHamt::get_slot(hash2, 0);
         // Check occupied bit
         for i in 0..N_CHILDREN {
-            assert_eq!(b64::get(hamt.root.occupied, i),
+            assert_eq!(b64::get(hamt.root.as_ref().unwrap().occupied, i),
                        i == slot || i == slot2,
                        "i={}, occupieds={:b}, slot1={}, slot2={}",
-                       i, hamt.root.occupied, slot, slot2);
+                       i, hamt.root.as_ref().unwrap().occupied, slot, slot2);
         }
         // Check children
-        assert_eq!(hamt.root.children.len(), 2);
-        assert!(hamt.root.children.contains(&Child::KVPair("peter", 5)));
-        assert!(hamt.root.children.contains(&Child::KVPair("david", 5)));
+        assert_eq!(hamt.root.as_ref().unwrap().children.len(), 2);
+        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KVPair("peter", 5)));
+        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KVPair("david", 5)));
 
         // Update peter again
         hamt.insert("peter", 3);
         // Check occupied bit
         for i in 0..N_CHILDREN {
-            assert_eq!(b64::get(hamt.root.occupied, i), i == slot || i == slot2);
+            assert_eq!(b64::get(hamt.root.as_ref().unwrap().occupied, i), i == slot || i == slot2);
         }
         // Check children
-        assert_eq!(hamt.root.children.len(), 2);
-        assert!(hamt.root.children.contains(&Child::KVPair("peter", 3)));
-        assert!(hamt.root.children.contains(&Child::KVPair("david", 5)));
+        assert_eq!(hamt.root.as_ref().unwrap().children.len(), 2);
+        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KVPair("peter", 3)));
+        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KVPair("david", 5)));
     }
 
     #[test]
