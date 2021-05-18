@@ -173,30 +173,38 @@ impl<K,V> Hamt<K,V>
             // (2) If grandchild to remove is a tree, then "recurse"
             match parent.children.get_mut(n).unwrap() {
                 Child::KVPair(k, v) => {
-                    let val = *v;
-                    parent.remove_child(n);
-                    Some(val)
+                    //if key == *k {
+                        let val = *v;
+                        parent.remove_child(n);
+                        parent.set_unoccupied(slot);
+                        Some(val)
+                    //}
+                    //None                 
                 }
                 Child::AMTNode(child) => {
                     let child = child.as_mut().unwrap();
+                    let child_slot = Self::get_slot(hash, level+1);
+                    let child_n = Self::choose_child(child, child_slot);
                     if child.children.len() == 2 {
-                        let child_slot = Self::get_slot(hash, level+1);
-                        let child_n = Self::choose_child(child, child_slot);
+                        
+                        let other_child_n = !child_n;
                         match child.children.get(child_n).unwrap() {
                             Child::KVPair(k, v) => {
                                 // pull up the other child if it's a KV pair
                                 let val = *v;
-                                let other_child_n = !child_n;
-                                let childy = *child.children.get(other_child_n).unwrap();
-                                parent.insert_child(n, childy);
+                                
+                                let grandchild = child.remove_child(other_child_n);                                
+                                parent.insert_child(child_n, grandchild);                            
+                                
+                                 
                                 Some(val)
                             }
                             Child::AMTNode(gchild) => {
-                                None
+                                Self::delete_in_node(child, key, hash, level+1, child_slot, child_n)
                             }
                         }
                     } else {
-                        None
+                        Self::delete_in_node(child, key, hash, level+1, child_slot, child_n)
                     }
                 }
             }
@@ -309,6 +317,26 @@ mod tests {
         ];
         for k in keys.iter() {
             assert_eq!(hamt.get(k), None);
+        }
+    }
+
+    // TODO: need to test removing with the merge
+    #[test]
+    fn test_remove() {
+        let mut hamt = Hamt::new();
+        let mut dict = HashMap::new();
+        let kvs = vec![
+            ("a", 1), ("b", 2), ("c", 3), ("aa", 4)
+        ];
+        for (k,v) in kvs.iter() {
+            hamt.insert(k, v);
+            dict.insert(*k, *v);
+        }
+        println!("{:?}", hamt);
+        for (k,v) in kvs.iter() {
+            //assert_eq!(hamt.remove(k), dict.get(*k));
+            hamt.remove(k);
+            println!("{:?}", hamt);
         }
     }
 }
