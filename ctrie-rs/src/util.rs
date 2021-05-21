@@ -156,7 +156,7 @@ pub mod bitarr {
         }
         /// Get bits in [a, b) and place in [0, b-a)
         pub fn get_bits(x: u128, a: usize, b:usize) -> u128 {
-            assert!(a >= 0 && b < 128);
+            assert!(b < 128);
             (x & half_open(a, b)) >> a
         }
         #[cfg(test)]
