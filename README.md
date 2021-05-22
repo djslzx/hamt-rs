@@ -10,13 +10,12 @@ A HAMT is a hash array mapped trie; HAMTs are often used in functional programmi
  
 ## Project Goals
 - Learn Rust, a modern systems programming language.
-- Learn about concurrent data structures.
-- Implement a non-trivial [data structure](https://www.cs.tau.ac.il/~shanir/concurrent-data-structures.pdf)
-  - [Ctrie](https://en.wikipedia.org/wiki/Ctrie), a concurrent hash array mapped trie (HAMT)
+- Learn about Hamts.
+- Implement a non-trivial tree data structure that uses hashing in Rust.
 
 ## Description of Project Deliverables
 A compiling Rust repository containing
-- Ctrie (or other data structure) implementation
+- Hamt implementation
 - Writeup describing core concepts and implementation details
 - Readme explaining usage
 - Tests
@@ -24,14 +23,10 @@ A compiling Rust repository containing
 ## List of Milestones
 1. Learn Rust (Rust Book)
     - [Hazard Pointers](https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.112.6406&rep=rep1&type=pdf)
-2. Learn Concurrency (OSTEP)
-3. Describe and understand CTrie interface, algorithms, and API
-    - [Lock-Free Resizeable Concurrent Tries](http://chara.epfl.ch/~prokopec/lcpc_ctries.pdf)
-    - [Cache-Aware Lock-Free Concurrent Hash Tries](https://arxiv.org/pdf/1709.06056.pdf)
-    - Rich Hickey on [Persistent Data Structures](https://www.youtube.com/watch?v=toD45DtVCFM&ab_channel=ZhangJian)
-4. Implement Ctrie from pseudocode in papers
-5. Testing
-    - Correctness tests: Does array mapped trie behave as expected and satisfy key features
+2. Describe and understand Hamt interface, algorithms, and API
+3. Implement Hamt
+4. Testing
+    - Correctness tests: Does Hamt behave as expected and satisfy key features?
         - Test API operations
         - Atomicity, Linearizability, lock-freedom
     - Performance tests: If time permits, compare against another [Rust implementation](https://github.com/ballard26/concurrent-hamt)
