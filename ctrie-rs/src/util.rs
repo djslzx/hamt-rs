@@ -37,6 +37,23 @@ pub mod bitarr {
         pub fn unset(x: u64, at: usize) -> u64 {
             x & !(1 << at)
         }
+        /// Bits in [a,b) set to 1, others set to 0;
+        /// Indexing from right (LSB has index 0)
+        pub fn half_open(a: usize, b: usize) -> u64 {
+            debug_assert!(a <= b, "({}, {}]", a, b);
+            if a == b {
+                0
+            } else if b - a == 64 {
+                !0
+            } else {
+                ((1 << (b - a)) - 1) << a
+            }
+        }
+        /// Get bits in [a, b) and place in [0, b-a)
+        pub fn get_bits(x: u64, a: usize, b:usize) -> u64 {
+            assert!(b < 64);
+            (x & half_open(a, b)) >> a
+        }
         pub fn set_to(x: u64, on: bool, at: usize) -> u64 {
             debug_assert!(at < 64);
             if on {
@@ -80,7 +97,6 @@ pub mod bitarr {
                 assert_eq!(get(0b1101_1001_1000, 10), true);
                 assert_eq!(get(0b1101_1001_1000, 11), true);
             }
-
             #[test]
             fn test_b64_set() {
                 // 0 -> 1
@@ -94,7 +110,6 @@ pub mod bitarr {
                 assert_eq!(set(!0, 4), !0);
                 assert_eq!(set(!0, 63), !0);
             }
-
             #[test]
             fn test_unset() {
                 let ones = !0_u64;
@@ -104,7 +119,6 @@ pub mod bitarr {
                     assert_eq!(unset(zeros, i), zeros);
                 }
             }
-
             #[test]
             fn test_set_to() {
                 let zeros = 0_u64;
@@ -116,7 +130,6 @@ pub mod bitarr {
                     assert_eq!(set_to(ones, false, i), !(1 << i), "i={}", i);
                 }
             }
-
             #[test]
             fn test_highest_set_bit() {
                 // One set bit at i
@@ -129,6 +142,23 @@ pub mod bitarr {
                         assert_eq!(highest_set_bit((1 << i) | (1 << j)), j)
                     }
                 }
+            }
+            #[test]
+            fn test_half_open() {
+                assert_eq!(half_open(0, 1), 1, "{:x}", half_open(0, 1));
+                assert_eq!(half_open(63, 64), 1 << 63, "{:x}", half_open(63, 64));
+                assert_eq!(half_open(0, 64), !0, "{:x}", half_open(0, 64));
+                assert_eq!(half_open(1, 64), !1, "{:x}", half_open(1, 64));
+                assert_eq!(half_open(0, 63), !(1 << 63), "{:x}", half_open(0, 63));
+                assert_eq!(half_open(1, 63), !0 << 2 >> 1, "{:x}", half_open(1, 64));
+            }
+            #[test]
+            fn test_get_bits() {
+                assert_eq!(get_bits(0b0, 0, 0), 0);
+                assert_eq!(get_bits(0b1, 0, 1), 1);
+                assert_eq!(get_bits(0b10, 0, 1), 0);
+                assert_eq!(get_bits(0b10, 1, 2), 1);
+                assert_eq!(get_bits(0b1010, 1, 4), 0b101);
             }
         }
     }

@@ -18,7 +18,9 @@ use std::{
         HashMap,
     }
 };
-use fasthash::murmur3::hash128_with_seed;
+use fasthash::{murmur3::Hasher128_x64, FastHasher, HasherExt};
+use std::hash::Hasher;
+use fasthash::city::Hash128;
 
 // Constants
 const N_CHILDREN: usize = 64;
@@ -35,7 +37,7 @@ struct Node<K,V>
 
 type Link<K,V> = Option<Box<Node<K,V>>>;
 
-type HashFn<K> = fn(K, u32) -> u128;
+type HashFn<K> = fn(K) -> u64;
 
 #[derive(Debug, PartialEq)]
 pub struct Hamt<K,V>
@@ -55,7 +57,7 @@ enum Child<K,V>
 }
 
 impl<K,V> Node<K,V>
-    where K: Hash + AsRef<[u8]> + PartialEq
+    where K: Hash + PartialEq
 {
     fn new() -> Node<K,V> {
         Node {
@@ -91,22 +93,28 @@ impl<K,V> fmt::Debug for Node<K,V>
     where K: Hash + fmt::Debug, V: fmt::Debug
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let occs: Vec<usize> = (0..64).filter(|&i|
+            b64::get(self.occupied, i)).collect();
         f.debug_struct("Tree")
-            .field("occupied", &format_args!("0x{:x}", self.occupied))
+            .field("occupied", &occs)
             .field("children", &self.children)
             .finish()
     }
 }
 
 impl<K,V> Hamt<K,V>
-    where K: Clone + Hash + AsRef<[u8]> + PartialEq + Copy + fmt::Debug,
+    where K: Clone + Hash + PartialEq + Copy + fmt::Debug,
           V: Clone + Copy + fmt::Debug
 {
     fn new() -> Hamt<K,V> {
         Self::with_seed(0)
     }
     fn with_seed(seed: u32) -> Hamt<K,V> {
-        let hash: HashFn<K> = |key, seed| hash128_with_seed(key, seed);
+        let hash: HashFn<K> = |key: K| {
+            let mut hasher = Hasher128_x64::new();
+            key.hash(&mut hasher);
+            hasher.finish()
+        };
         Self::with_hash_and_seed(hash, seed)
     }
     fn with_hash_and_seed(hash: HashFn<K>, seed: u32) -> Hamt<K,V> {
@@ -116,16 +124,16 @@ impl<K,V> Hamt<K,V>
             hash,
         }
     }
-    fn get_slot(hash: u128, level: usize) -> usize {
+    fn get_slot(hash: u64, level: usize) -> usize {
         assert!((level+1) * LOG_N_CHILDREN < 128, "level={}", level);
-        b128::get_bits(hash,
-                       level * LOG_N_CHILDREN,
-                       (level+1) * LOG_N_CHILDREN) as usize
+        b64::get_bits(hash,
+                      level * LOG_N_CHILDREN,
+                      (level+1) * LOG_N_CHILDREN) as usize
     }
     fn choose_child(node: &Node<K,V>, slot: usize) -> usize {
         (if slot == 0 {0} else {bitrank(node.occupied, slot-1)}) as usize
     }
-    fn insert_into_node(node: &mut Node<K,V>, key: K, val: V, hash: u128, level: usize, seed: u32, hasher: HashFn<K>) {
+    fn insert_into_node(node: &mut Node<K,V>, key: K, val: V, hash: u64, level: usize, seed: u32, hasher: HashFn<K>) {
         let slot = Self::get_slot(hash, level);
         let n = Self::choose_child(node, slot);
         if node.occupied_at(slot) {
@@ -137,7 +145,7 @@ impl<K,V> Hamt<K,V>
                     } else {
                         // if occupied by entry with different key, replace with subtree
                         let mut subnode = Node::new();
-                        let old_hash = hasher(*k, seed);
+                        let old_hash = hasher(*k);
                         Self::insert_into_node(&mut subnode, *k, *v, old_hash, level+1, seed, hasher);
                         Self::insert_into_node(&mut subnode, key, val, hash, level+1, seed, hasher);
                         node.replace_child(n, Child::Tree(Node::new_tree(subnode)));
@@ -154,7 +162,7 @@ impl<K,V> Hamt<K,V>
             node.insert_child(n, Child::KV(key, val));
         }
     }
-    fn lookup_in_node(node: &Node<K,V>, key: K, hash: u128, level: usize) -> Option<V> {
+    fn lookup_in_node(node: &Node<K,V>, key: K, hash: u64, level: usize) -> Option<V> {
         let slot = Self::get_slot(hash, level);
         if node.occupied_at(slot) {
             let n = Self::choose_child(node, slot);
@@ -172,7 +180,7 @@ impl<K,V> Hamt<K,V>
             None
         }
     }
-    fn delete_in_node(node: &mut Node<K,V>, key: K, hash: u128, level: usize, slot: usize, n: usize) -> Option<V> {
+    fn delete_in_node(node: &mut Node<K,V>, key: K, hash: u64, level: usize, slot: usize, n: usize) -> Option<V> {
         if !node.occupied_at(slot) {
             None
         } else {
@@ -204,10 +212,8 @@ impl<K,V> Hamt<K,V>
                                 // pull up the other child if it's a KV pair and key matches
                                 if *k == key {
                                     let val = *v;
-                                    let other_n = if sub_n == 0 {1} else {0};
-                                    let grandchild = subtree.remove_child(other_n);
-                                    node.remove_child(n);
-                                    node.insert_child(n, grandchild);
+                                    let grandchild = subtree.remove_child(if sub_n == 0 {1} else {0});
+                                    node.replace_child(n, grandchild);
                                     Some(val)
                                 } else {
                                     None
@@ -222,16 +228,17 @@ impl<K,V> Hamt<K,V>
         }
     }
     fn insert(&mut self, key: K, val: V) {
-        let hash = (self.hash)(key, self.seed);
-        Self::insert_into_node(&mut self.root.as_mut().unwrap(), key, val, hash, 0, self.seed, self.hash)
+        let hash = (self.hash)(key);
+        Self::insert_into_node(&mut self.root.as_mut().unwrap(), key, val, hash,
+                               0, self.seed, self.hash)
     }
     fn get(&self, key: K) -> Option<V> {
-        let hash = (self.hash)(key, self.seed);
+        let hash = (self.hash)(key);
         let root = self.root.as_ref().unwrap();
         Self::lookup_in_node(root, key, hash, 0)
     }
     fn remove(&mut self, key: K) -> Option<V> {
-        let hash = (self.hash)(key, self.seed);
+        let hash = (self.hash)(key);
         let slot = Self::get_slot(hash, 0);
         let n = Self::choose_child(&self.root.as_mut().unwrap(), slot);
         Self::delete_in_node(&mut self.root.as_mut().unwrap(), key, hash, 0, slot, n)
@@ -260,7 +267,7 @@ mod tests {
         let mut hamt = Hamt::new();
         // First insert
         hamt.insert("peter", 2);
-        let hash = (hamt.hash)("peter", hamt.seed);
+        let hash = (hamt.hash)("peter");
         let slot = TestHamt::get_slot(hash, 0);
         // Check occupied bit
         for i in 0..N_CHILDREN {
@@ -284,7 +291,7 @@ mod tests {
 
         // Insert second kv pair
         hamt.insert("david", 5);
-        let hash2 = (hamt.hash)("david", hamt.seed);
+        let hash2 = (hamt.hash)("david");
         let slot2 = TestHamt::get_slot(hash2, 0);
         // Check occupied bit
         for i in 0..N_CHILDREN {
@@ -350,7 +357,7 @@ mod tests {
 
     #[test]
     fn test_insert_tree() {
-        let hash = |k, _| {
+        let hash = |k| {
             match k {
                 "a" => 0b0_000000_000000,
                 "b" => 0b0_000001_000000,
@@ -359,7 +366,7 @@ mod tests {
             }
         };
         let mut hamt = Hamt::with_hash_and_seed(hash, 0);
-        let items: Vec<(u128, &str, i32)> = vec![
+        let items: Vec<(u64, &str, i32)> = vec![
             (0b0_000000_000000, "a", 1),
             (0b0_000001_000000, "b", 2),
             (0b1_000001_000000, "c", 3),
@@ -390,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_remove_tree_one_level() {
-        let hash = |k, _| {
+        let hash = |k| {
             match k {
                 "a" => 0b0_000000_000000,
                 "b" => 0b0_000001_000000,
@@ -398,7 +405,7 @@ mod tests {
             }
         };
         let mut hamt = Hamt::with_hash_and_seed(hash, 0);
-        let items: Vec<(u128, &str, i32)> = vec![
+        let items: Vec<(u64, &str, i32)> = vec![
             (0b0_000000_000000, "a", 1),
             (0b0_000001_000000, "b", 2),
         ];
@@ -456,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_remove_nonexistent() {
-        let hash: HashFn<&str> = |k, _| {
+        let hash: HashFn<&str> = |k| {
             match k {
                 "a" => 0b0_000000_000000,
                 "b" => 0b0_000001_000000,
@@ -466,7 +473,7 @@ mod tests {
             }
         };
         let mut hamt = Hamt::with_hash_and_seed(hash, 0);
-        let items: Vec<(u128, &str, i32)> = vec![
+        let items: Vec<(u64, &str, i32)> = vec![
             (0b0_000000_000000, "a", 1),
             (0b0_000001_000000, "b", 2),
             (0b1_000001_000000, "c", 3),
@@ -479,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_remove_two_levels() {
-        let hash = |k, _| {
+        let hash = |k| {
             match k {
                 "a" => 0b0_000000_000000,
                 "b" => 0b0_000001_000000,
@@ -488,7 +495,7 @@ mod tests {
             }
         };
         let mut hamt = Hamt::with_hash_and_seed(hash, 0);
-        let items: Vec<(u128, &str, i32)> = vec![
+        let items: Vec<(u64, &str, i32)> = vec![
             (0b0_000000_000000, "a", 1),
             (0b0_000001_000000, "b", 2),
             (0b1_000001_000000, "c", 3),
@@ -526,6 +533,15 @@ mod tests {
             hamt, ref_hamt
         );
         assert_eq!(hamt.remove("c"), Some(3));
+    }
+
+    #[test]
+    fn test_high_volume() {
+        let mut hamt = Hamt::new();
+        for i in 0..100 {
+            hamt.insert(i, i);
+        }
+        println!("{:#?}", hamt);
     }
 }
 

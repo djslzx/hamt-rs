@@ -55,7 +55,7 @@ mod tests {
         list.push('c');
         list.push('b');
         list.push('a');
-        println!("list={:?}", list);
+        // println!("list={:?}", list);
     }
 
     #[test]
