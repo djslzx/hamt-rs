@@ -5,8 +5,8 @@ A Rust HAMT implementation
 Andrew Thai, David Lee, Peter Zhao
 
 ## Overview
-Implement a Ctrie, a concurrent data structure, in Rust.
-A Ctrie is a concurrent hash array mapped trie (HAMT); HAMTs are often used in functional programming languages (e.g. Clojure, Haskell).
+Implement a Hamt, a trie data structure, in Rust.
+A HAMT is a hash array mapped trie; HAMTs are often used in functional programming languages (e.g. Clojure, Haskell).
  
 ## Project Goals
 - Learn Rust, a modern systems programming language.
