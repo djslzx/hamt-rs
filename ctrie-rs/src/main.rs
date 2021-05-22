@@ -8,7 +8,7 @@ mod deque;
 use crate::util::{
     bitrank,
     bitarr::{
-        b64, b128,
+        b64,
     },
 };
 use std::{
@@ -18,9 +18,8 @@ use std::{
         HashMap,
     }
 };
-use fasthash::{murmur3::Hasher128_x64, FastHasher, HasherExt};
+use fasthash::{murmur3::Hasher128_x64, FastHasher};
 use std::hash::Hasher;
-use fasthash::city::Hash128;
 
 // Constants
 const N_CHILDREN: usize = 64;
@@ -96,7 +95,7 @@ impl<K,V> fmt::Debug for Node<K,V>
         let occs: Vec<usize> = (0..64).filter(|&i|
             b64::get(self.occupied, i)).collect();
         f.debug_struct("Tree")
-            .field("occupied", &occs)
+            .field("occupied", &format_args!("{:?}", occs))
             .field("children", &self.children)
             .finish()
     }
