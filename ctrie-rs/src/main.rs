@@ -26,14 +26,14 @@ const LOG_N_CHILDREN: usize = 6;
 
 // Structs
 #[derive(PartialEq)]
-pub struct Node<K,V>
+struct Node<K,V>
     where K: Hash
 {
     occupied: u64,
     children: Vec<Child<K,V>>,
 }
 
-pub type Tree<K,V> = Option<Box<Node<K,V>>>;
+type Link<K,V> = Option<Box<Node<K,V>>>;
 
 type HashFn<K> = fn(K, u32) -> u128;
 
@@ -41,7 +41,7 @@ type HashFn<K> = fn(K, u32) -> u128;
 pub struct Hamt<K,V>
     where K: Hash
 {
-    root: Tree<K,V>,
+    root: Link<K,V>,
     seed: u32,
     hash: HashFn<K>,
 }
@@ -50,8 +50,8 @@ pub struct Hamt<K,V>
 enum Child<K,V>
     where K: Hash
 {
-    KVPair(K, V),
-    AMTNode(Tree<K,V>),
+    KV(K, V),
+    Tree(Link<K,V>),
 }
 
 impl<K,V> Node<K,V>
@@ -63,8 +63,8 @@ impl<K,V> Node<K,V>
             children: Vec::new(),
         }
     }
-    fn new_tree() -> Tree<K,V> {
-        Some(Box::new(Self::new()))
+    fn new_tree(n: Node<K,V>) -> Link<K,V> {
+        Some(Box::new(n))
     }
     fn occupied_at(&self, i: usize) -> bool {
         b64::get(self.occupied, i)
@@ -111,7 +111,7 @@ impl<K,V> Hamt<K,V>
     }
     fn with_hash_and_seed(hash: HashFn<K>, seed: u32) -> Hamt<K,V> {
         Hamt {
-            root: Node::new_tree(),
+            root: Node::new_tree(Node::new()),
             seed,
             hash,
         }
@@ -130,21 +130,20 @@ impl<K,V> Hamt<K,V>
         let n = Self::choose_child(node, slot);
         if node.occupied_at(slot) {
             match node.children.get_mut(n).unwrap() {
-                Child::KVPair(k, v) => {
+                Child::KV(k, v) => {
                     if *k == key {
                         // if occupied by entry with the same key, update value
                         *v = val;
                     } else {
                         // if occupied by entry with different key, replace with subtree
-                        let mut subtree = Node::new_tree();
-                        let mut subnode = subtree.as_mut().unwrap();
+                        let mut subnode = Node::new();
                         let old_hash = hasher(*k, seed);
                         Self::insert_into_node(&mut subnode, *k, *v, old_hash, level+1, seed, hasher);
                         Self::insert_into_node(&mut subnode, key, val, hash, level+1, seed, hasher);
-                        node.replace_child(n, Child::AMTNode(subtree));
+                        node.replace_child(n, Child::Tree(Node::new_tree(subnode)));
                     }
                 }
-                Child::AMTNode(tree) => {
+                Child::Tree(tree) => {
                     // if subtree, then enter subtree and recursively insert
                     Self::insert_into_node(tree.as_mut().unwrap(), key, val, hash, level+1, seed, hasher);
                 }
@@ -152,7 +151,7 @@ impl<K,V> Hamt<K,V>
         } else {
             // add the k-v pair, set occupied
             node.set_occupied(slot);
-            node.insert_child(n, Child::KVPair(key, val));
+            node.insert_child(n, Child::KV(key, val));
         }
     }
     fn lookup_in_node(node: &Node<K,V>, key: K, hash: u128, level: usize) -> Option<V> {
@@ -160,13 +159,13 @@ impl<K,V> Hamt<K,V>
         if node.occupied_at(slot) {
             let n = Self::choose_child(node, slot);
             match node.children.get(n).unwrap() {
-                Child::KVPair(k, v) =>
+                Child::KV(k, v) =>
                     if *k == key {
                         Some(*v)
                     } else {
                         None
                     },
-                Child::AMTNode(tree) =>
+                Child::Tree(tree) =>
                     Self::lookup_in_node(tree.as_ref().unwrap(), key, hash, level+1),
             }
         } else {
@@ -182,7 +181,7 @@ impl<K,V> Hamt<K,V>
             // (1) If grandchild to remove is a kvpair, then replace the child with the other grandchild
             // (2) If grandchild to remove is a tree, then "recurse"
             match node.children.get_mut(n).unwrap() {
-                Child::KVPair(k, v) => {
+                Child::KV(k, v) => {
                     if *k == key {
                         let val = *v;
                         node.remove_child(n);
@@ -192,16 +191,16 @@ impl<K,V> Hamt<K,V>
                         None
                     }
                 }
-                Child::AMTNode(subtree) => {
+                Child::Tree(subtree) => {
                     let subtree = subtree.as_mut().unwrap();
                     let sub_slot = Self::get_slot(hash, level+1);
                     let sub_n = Self::choose_child(subtree, sub_slot);
                     if subtree.children.len() == 2 {
                         match subtree.children.get(sub_n).unwrap() {
-                            Child::AMTNode(_) => {
+                            Child::Tree(_) => {
                                 Self::delete_in_node(subtree, key, hash, level+1, sub_slot, sub_n)
                             }
-                            Child::KVPair(k, v) => {
+                            Child::KV(k, v) => {
                                 // pull up the other child if it's a KV pair and key matches
                                 if *k == key {
                                     let val = *v;
@@ -270,7 +269,7 @@ mod tests {
         // Check children
         assert_eq!(hamt.root.as_ref().unwrap().children.len(), 1);
         assert_eq!(*hamt.root.as_ref().unwrap().children.first().unwrap(),
-                   Child::KVPair("peter", 2));
+                   Child::KV("peter", 2));
 
         // Update value
         hamt.insert("peter", 5);
@@ -281,7 +280,7 @@ mod tests {
         // Check children
         assert_eq!(hamt.root.as_ref().unwrap().children.len(), 1);
         assert_eq!(*hamt.root.as_ref().unwrap().children.first().unwrap(),
-                   Child::KVPair("peter", 5));
+                   Child::KV("peter", 5));
 
         // Insert second kv pair
         hamt.insert("david", 5);
@@ -296,8 +295,8 @@ mod tests {
         }
         // Check children
         assert_eq!(hamt.root.as_ref().unwrap().children.len(), 2);
-        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KVPair("peter", 5)));
-        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KVPair("david", 5)));
+        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KV("peter", 5)));
+        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KV("david", 5)));
 
         // Update peter again
         hamt.insert("peter", 3);
@@ -307,8 +306,8 @@ mod tests {
         }
         // Check children
         assert_eq!(hamt.root.as_ref().unwrap().children.len(), 2);
-        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KVPair("peter", 3)));
-        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KVPair("david", 5)));
+        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KV("peter", 3)));
+        assert!(hamt.root.as_ref().unwrap().children.contains(&Child::KV("david", 5)));
     }
 
     #[test]
@@ -343,7 +342,6 @@ mod tests {
         for (k,v) in kvs.iter() {
             hamt.insert(k, v);
         }
-        println!("{:?}", hamt);
         for (k, _) in kvs.iter() {
             hamt.remove(k);
             assert_eq!(hamt.get(k), None);
@@ -375,15 +373,15 @@ mod tests {
                 root: Some(Box::new(Node {
                     occupied: 0b1,
                     children: vec![
-                        Child::AMTNode(Some(Box::new(Node {
+                        Child::Tree(Some(Box::new(Node {
                             occupied: 0b11,
                             children: vec![
-                                Child::KVPair("a", 1),
-                                Child::AMTNode(Some(Box::new(Node {
+                                Child::KV("a", 1),
+                                Child::Tree(Some(Box::new(Node {
                                     occupied: 0b11,
                                     children: vec![
-                                        Child::KVPair("b", 2),
-                                        Child::KVPair("c", 3)
+                                        Child::KV("b", 2),
+                                        Child::KV("c", 3)
                                     ]})))]})))]})),
                 seed: 0,
                 hash
@@ -413,11 +411,11 @@ mod tests {
                 root: Some(Box::new(Node {
                     occupied: 0b1,
                     children: vec![
-                        Child::AMTNode(Some(Box::new(Node {
+                        Child::Tree(Some(Box::new(Node {
                             occupied: 0b11,
                             children: vec![
-                                Child::KVPair("a", 1),
-                                Child::KVPair("b", 2),
+                                Child::KV("a", 1),
+                                Child::KV("b", 2),
                             ]
                         })))
                     ]
@@ -434,7 +432,7 @@ mod tests {
                 root: Some(Box::new(Node {
                     occupied: 0b1,
                     children: vec![
-                        Child::KVPair("a", 1),
+                        Child::KV("a", 1),
                     ]
                 })),
                 seed: 0,
@@ -502,17 +500,17 @@ mod tests {
             root: Some(Box::new(Node {
                 occupied: 0b1,
                 children: vec![
-                    Child::AMTNode(
+                    Child::Tree(
                         Some(Box::new(Node {
                             occupied: 0b11,
                             children: vec![
-                                Child::KVPair("a", 1),
-                                Child::AMTNode(
+                                Child::KV("a", 1),
+                                Child::Tree(
                                     Some(Box::new(Node {
                                         occupied: 0b11,
                                         children: vec![
-                                            Child::KVPair("b", 2),
-                                            Child::KVPair("c", 3),
+                                            Child::KV("b", 2),
+                                            Child::KV("c", 3),
 
                                         ]
                                     }))
@@ -528,7 +526,6 @@ mod tests {
             hamt, ref_hamt
         );
         assert_eq!(hamt.remove("c"), Some(3));
-
     }
 }
 
