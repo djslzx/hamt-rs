@@ -1,4 +1,4 @@
-# ctrie-rs
+# hamt-rs
 A Rust Ctrie implementation
 
 ## Contributors
