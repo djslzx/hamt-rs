@@ -168,45 +168,50 @@ impl<K,V> Hamt<K,V>
             None
         }
     }
-    fn delete_in_node(parent: &mut Node<K,V>, key: K, hash: u128, level: usize, slot: usize, n: usize) -> Option<V> {
-        if !parent.occupied_at(slot) {
+    fn delete_in_node(node: &mut Node<K,V>, key: K, hash: u128, level: usize, slot: usize, n: usize) -> Option<V> {
+        if !node.occupied_at(slot) {
             None
         } else {
             // If child is kvpair, then remove
             // If parent's child has 2 children, then:
             // (1) If grandchild to remove is a kvpair, then replace the child with the other grandchild
             // (2) If grandchild to remove is a tree, then "recurse"
-            match parent.children.get_mut(n).unwrap() {
+            match node.children.get_mut(n).unwrap() {
                 Child::KVPair(k, v) => {
                     if *k == key {
                         let val = *v;
-                        parent.remove_child(n);
-                        parent.set_unoccupied(slot);
+                        node.remove_child(n);
+                        node.set_unoccupied(slot);
                         Some(val)
                     } else {
                         None
                     }
                 }
-                Child::AMTNode(child) => {
-                    let child = child.as_mut().unwrap();
-                    let child_slot = Self::get_slot(hash, level+1);
-                    let child_n = Self::choose_child(child, child_slot);
-                    if child.children.len() == 2 {
-                        let other_child_n = !child_n;
-                        match child.children.get(child_n).unwrap() {
-                            Child::KVPair(_, v) => {
-                                // pull up the other child if it's a KV pair
-                                let val = *v;
-                                let grandchild = child.remove_child(other_child_n);
-                                parent.insert_child(child_n, grandchild);
-                                Some(val)
-                            }
+                Child::AMTNode(subtree) => {
+                    let subtree = subtree.as_mut().unwrap();
+                    let sub_slot = Self::get_slot(hash, level+1);
+                    let sub_n = Self::choose_child(subtree, sub_slot);
+                    if subtree.children.len() == 2 {
+                        match subtree.children.get(sub_n).unwrap() {
                             Child::AMTNode(_) => {
-                                Self::delete_in_node(child, key, hash, level+1, child_slot, child_n)
+                                Self::delete_in_node(subtree, key, hash, level+1, sub_slot, sub_n)
+                            }
+                            Child::KVPair(k, v) => {
+                                // pull up the other child if it's a KV pair and key matches
+                                if *k == key {
+                                    let val = *v;
+                                    let other_n = if sub_n == 0 {1} else {0};
+                                    let grandchild = subtree.remove_child(other_n);
+                                    node.remove_child(n);
+                                    node.insert_child(n, grandchild);
+                                    Some(val)
+                                } else {
+                                    None
+                                }
                             }
                         }
                     } else {
-                        Self::delete_in_node(child, key, hash, level+1, child_slot, child_n)
+                        Self::delete_in_node(subtree, key, hash, level+1, sub_slot, sub_n)
                     }
                 }
             }
@@ -241,16 +246,18 @@ impl<K,V> Hamt<K,V>
 #[cfg(test)]
 mod tests {
     use super::*;
+
     type TestHamt<'a> = Hamt<&'a str, i32>;
 
     #[test]
     fn test_get_slot() {
-        assert_eq!(TestHamt::get_slot(0b1000000, 0), 0);
-        assert_eq!(TestHamt::get_slot(0b1000000, 1), 1);
-        assert_eq!(TestHamt::get_slot(0b11000000, 1), 0b11);
-        assert_eq!(TestHamt::get_slot(0b1000000111111000000, 1), 0b111111);
-        assert_eq!(TestHamt::get_slot(0b1000000111111000000, 2), 0);
-        assert_eq!(TestHamt::get_slot(0b1000000111111000000, 3), 1);
+        assert_eq!(TestHamt::get_slot(0b01_000000, 0), 0);
+        assert_eq!(TestHamt::get_slot(0b01_000000, 1), 1);
+        assert_eq!(TestHamt::get_slot(0b11_000000, 1), 0b11);
+        assert_eq!(TestHamt::get_slot(0b01_000000_111111_000000, 0), 0);
+        assert_eq!(TestHamt::get_slot(0b01_000000_111111_000000, 1), 0b111111);
+        assert_eq!(TestHamt::get_slot(0b01_000000_111111_000000, 2), 0);
+        assert_eq!(TestHamt::get_slot(0b01_000000_111111_000000, 3), 1);
     }
 
     #[test]
@@ -358,26 +365,79 @@ mod tests {
         for (h, k, v) in items.iter() {
             hamt.raw_insert(*h, *k, *v);
         }
-        println!("{:?}", hamt);
         assert_eq!(
             hamt,
-            TestHamt { root: Some(Box::new(Node {
-                occupied: 0x1,
-                children: vec![
-                    Child::AMTNode(Some(Box::new(Node {
-                        occupied: 0x400000002,
-                        children: vec![
-                            Child::AMTNode(Some(Box::new(Node {
-                                occupied: 0x2000000000000002,
-                                children: vec![
-                                    Child::KVPair("c", 3),
-                                    Child::KVPair("b", 2)
-                                ]
-                            }))),
-                            Child::KVPair("a", 1)]
-                    })))]
-            })),
+            TestHamt {
+                root: Some(Box::new(Node {
+                    occupied: 0x1,
+                    children: vec![
+                        Child::AMTNode(Some(Box::new(Node {
+                            occupied: 0x400000002,
+                            children: vec![
+                                Child::AMTNode(Some(Box::new(Node {
+                                    occupied: 0x2000000000000002,
+                                    children: vec![
+                                        Child::KVPair("c", 3),
+                                        Child::KVPair("b", 2)
+                                    ]}))),
+                                Child::KVPair("a", 1)]})))]})),
                 seed: 0 });
+    }
+
+    #[test]
+    fn test_remove_tree() {
+        let mut hamt = Hamt::new();
+        let items: Vec<(u128, &str, i32)> = vec![
+            (0b0_000000_000000, "a", 1),
+            (0b0_000001_000000, "b", 2),
+        ];
+        for (h, k, v) in items.iter() {
+            hamt.raw_insert(*h, *k, *v);
+        }
+        assert_eq!(
+            hamt,
+            TestHamt {
+                root: Some(Box::new(Node {
+                    occupied: 0b1,
+                    children: vec![
+                        Child::AMTNode(Some(Box::new(Node {
+                            occupied: 0x400000002,
+                            children: vec![
+                                Child::KVPair("b", 2),
+                                Child::KVPair("a", 1),
+                            ]
+                        })))
+                    ]
+                })),
+                seed: 0,
+            }
+        );
+        let v = hamt.raw_remove(0b0_000000_000000, "b");
+        assert_eq!(v, Some(2));
+        assert_eq!(
+            hamt,
+            TestHamt {
+                root: Some(Box::new(Node {
+                    occupied: 0b1,
+                    children: vec![
+                        Child::KVPair("a", 1),
+                    ]
+                })),
+                seed: 0,
+            }
+        );
+        let v = hamt.raw_remove(0b0_000000_000000, "a");
+        assert_eq!(v, Some(1));
+        assert_eq!(
+            hamt,
+            TestHamt {
+                root: Some(Box::new(Node {
+                    occupied: 0,
+                    children: vec![]
+                })),
+                seed: 0,
+            }
+        );
     }
 }
 
