@@ -1,5 +1,5 @@
 # hamt-rs
-A Rust Ctrie implementation
+A Rust HAMT implementation
 
 ## Contributors
 Andrew Thai, David Lee, Peter Zhao
